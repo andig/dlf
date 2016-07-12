@@ -6,9 +6,32 @@ use Concat\Http\Handler\CacheHandler;
 use Doctrine\Common\Cache\FilesystemCache;
 
 require_once('./vendor/autoload.php');
+require_once('credentials.php');
 
 define('CACHE_DURATION', 3600 * 24 * 365);
 define('CATALOG_FILE', 'catalog.json');
+
+function getSpotifyApiToken() {
+    global $client;
+
+    $payload = base64_encode(CLIENTID .':'. CLIENTSECRET);
+    $response = $client->request('POST', 'https://accounts.spotify.com/api/token', [
+        'headers' => [
+            'Authorization' => 'Basic ' . $payload
+        ],
+        'form_params' => [
+            'grant_type' => 'client_credentials'
+        ]
+    ]);
+
+    if ($response->getStatusCode() != 200) {
+        echo (string) $response->getBody();
+        die;
+    }
+
+    $token = json_decode((string) $response->getBody())->access_token;
+    return $token;
+}
 
 function parseItem($domElement) {
     $html = $domElement->ownerDocument->saveHTML($domElement);
@@ -63,22 +86,28 @@ function parseItem($domElement) {
     return $item;
 }
 
-function getSpotifyVariantUri($item, $variant) {
+function getSpotifyVariantUri($item, $variant, &$search) {
     $uri = 'https://api.spotify.com/v1/search?type=track&';
 
-    if (in_array('track', $variant) && isset($item['Titel']))
+    if (in_array('track', $variant) && isset($item['Titel'])) {
+        $search .= $item['Titel'];
         $uri .= sprintf("q=%s", urlencode($item['Titel']));
+    }
 
-    if (in_array('album', $variant) && isset($item['Album']))
+    if (in_array('album', $variant) && isset($item['Album'])) {
+        $search .= sprintf(" (%s)", $item['Album']);
         $uri .= sprintf("+album:%s", urlencode($item['Album']));
+    }
 
-    if (in_array('interpret', $variant) && isset($item['Interpret']))
+    if (in_array('interpret', $variant) && isset($item['Interpret'])) {
+        $search .= sprintf(" by %s", $item['Interpret']);
         $uri .= sprintf("+artist:%s", urlencode($item['Interpret']));
+    }
 
     return $uri;
 }
 
-function searchSpotify($item) {
+function searchSpotify($item, &$res) {
     global $client;
 
     // if ($item['Titel'] !== 'Beautiful day')
@@ -99,12 +128,12 @@ function searchSpotify($item) {
         ['track']
     ];
 
-    print_r($item);
-
     foreach ($variants as $variant) {
-        $uri = getSpotifyVariantUri($item, $variant);
+        $search = '';
+        $uri = getSpotifyVariantUri($item, $variant, $search);
+        printf("Search: %s\n", $search);
 
-        printf("%s", $uri);
+        // printf("%s", $uri);
         $response = $client->get($uri);
 
         if ($response->getStatusCode() !== 200) {
@@ -113,25 +142,38 @@ function searchSpotify($item) {
         }
 
         $json = json_decode($response->getBody());
-        // print_r($json);
-        printf(" -> %d\n", $json->tracks->total);
+        // printf(" -> %d\n", $json->tracks->total);
 
         if ($json->tracks->total) {
             // print_r($json);
             // echo $response->getBody();
+            printf("Found: %s (%s) by %s\n",
+                $json->tracks->items[0]->name,
+                $json->tracks->items[0]->album->name,
+                $json->tracks->items[0]->artists[0]->name
+            );
+            foreach ($json->tracks->items as &$item) {
+                unset($item->available_markets);
+                unset($item->album->available_markets);
+                unset($item->album->images);
+                // print_r($item);
+            }
+            $res = $json;
             break;
         }
     }
 
+    if (!$json->tracks->total)
+        printf("Not found\n");
+
     echo("\n");
+    return $json->tracks->total > 0;
 }
 
 // Basic directory cache example
 $cacheProvider = new FilesystemCache(__DIR__ . '/cache');
-
 // Guzzle will determine an appropriate default handler if `null` is given.
 $defaultHandler = null;
-
 // Create a cache handler with a given cache provider and default handler.
 $handler = new CacheHandler($cacheProvider, $defaultHandler, [
     'methods' => ['GET'],
@@ -153,14 +195,22 @@ $op = "search";
 
 if ($op == "search") {
     $items = json_decode(file_get_contents(CATALOG_FILE), true);
+    $hits = 0;
+    $json = null;
+
     foreach ($items as $item) {
-        searchSpotify($item);
+        $res = searchSpotify($item, $json);
+        if ($res) {
+            $hits++;
+            // print_r($json);
+        }
     }
+
+    printf("Found %d of %d titles\n", $hits, count($items));
     exit;
 }
 
 while ($date->getTimestamp() - $now < 0) {
-    // http://www.deutschlandfunk.de/playlist-klassik-pop-et-cetera.828.de.html?cal:month=11&cal:year=2013&drpl:date=2013-11-16
     $uri = sprintf('http://www.deutschlandfunk.de/playlist-klassik-pop-et-cetera.828.de.html?drpl:date=%s', $date->format("Y-m-d"));
     printf("> fetching %s from %s\n", $date->format("Y-m-d"), $uri);
 
