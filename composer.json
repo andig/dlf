@@ -1,0 +1,18 @@
+{
+    "name": "andig/dlf",
+    "minimum-stability": "dev",
+    "require": {
+        "symfony/dom-crawler": "^3.1",
+        "guzzlehttp/guzzle": "^6.2",
+        "symfony/css-selector": "^3.1",
+        "rtheunissen/guzzle-cache-handler": "^1.1",
+        "doctrine/cache": "^1.6",
+        "jwilsson/spotify-web-api-php": "^1.3"
+    },
+    "authors": [
+        {
+            "name": "andig",
+            "email": "cpuidle@gmx.de"
+        }
+    ]
+}
