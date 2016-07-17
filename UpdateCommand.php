@@ -17,6 +17,12 @@ class UpdateCommand extends Command
         $this
             ->setName('update')
             ->setDescription('Update DLF playlist catalog')
+            ->addArgument(
+                'playlist',
+                InputArgument::OPTIONAL,
+                'Playlist name',
+                'klassik-pop-et-cetera'
+            )
         ;
     }
 
@@ -44,6 +50,9 @@ class UpdateCommand extends Command
             if ($item['Album'] == 'Klassik - Pop - et - cetera')
                 return;
 
+            if ($item['Album'] == '[Obertitel wird nachgetragen]')
+                return;
+
             if (strpos($item['Album'], 'aus: ') === 0)
                 $item['Album'] = substr($item['Album'], strlen('aus: '));
 
@@ -59,6 +68,9 @@ class UpdateCommand extends Command
 
         if (isset($item['Titel'])) {
             if (strpos($item['Titel'], 'Am Mikrofon: ') !== FALSE)
+                return;
+
+            if ($item['Titel'] == 'Indikativ "Corso Theme"')
                 return;
 
             if (strpos($item['Titel'], 'aus: ') === 0)
@@ -81,8 +93,19 @@ class UpdateCommand extends Command
 
         $client = ClientFactory::getClient();
 
+        switch ($playlistName = $input->getArgument('playlist')) {
+            case 'klassik-pop-et-cetera':
+                $playlistUri = 'http://www.deutschlandfunk.de/playlist-klassik-pop-et-cetera.828.de.html?drpl:date=%s';
+                break;
+            case 'corso':
+                $playlistUri = 'http://www.deutschlandfunk.de/playlist-corso.809.de.html?drpl:date=%s';
+                break;
+            default:
+                throw new \Exception('Unknown playlist');
+        }
+
         while ($date->getTimestamp() - $now < 0) {
-            $uri = sprintf('http://www.deutschlandfunk.de/playlist-klassik-pop-et-cetera.828.de.html?drpl:date=%s', $date->format("Y-m-d"));
+            $uri = sprintf($playlistUri, $date->format("Y-m-d"));
             printf("> fetching %s from %s\n", $date->format("Y-m-d"), $uri);
 
             $response = $client->get($uri);
@@ -98,10 +121,16 @@ class UpdateCommand extends Command
                     $items[] = $item;
             }
 
-            $date->add(new \DateInterval('P7D'));
+            switch ($playlistName) {
+                case 'corso':
+                    $date->add(new \DateInterval('P1D'));
+                    break;
+                default:
+                    $date->add(new \DateInterval('P7D'));
+            }
         }
 
-        file_put_contents(CATALOG_FILE, json_encode($items, JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE));
+        file_put_contents($playlistName . '.json', json_encode($items, JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE));
     }
 }
 
