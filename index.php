@@ -8,10 +8,7 @@ use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 
-use SpotifyWebAPI\Session;
-use SpotifyWebAPI\SpotifyWebAPI;
-
-use GuzzleHttp\Cookie\FileCookieJar;
+use SpotifyWebAPI\SpotifyWebAPIException;
 
 require_once('./vendor/autoload.php');
 require_once('credentials.php');
@@ -32,36 +29,61 @@ elseif (isset($_GET['code']) && ($code = $_GET['code'])) {
     $api->getSession()->requestAccessToken($code);
     $accessToken = $api->getSession()->getAccessToken();
 
-    header('Location: ?token=' . $accessToken);
+    $expires = $api->getSession()->getTokenExpiration();
+
+    header('Location: ?token=' . $accessToken . '&expires=' . $expires);
 }
 elseif (isset($_GET['token']) && ($accessToken = $_GET['token'])) {
     file_put_contents(TOKEN_FILE, $accessToken);
     $api->setAccessToken($accessToken);
 
-    printf("<h2>Authorized</h2><p>Token: %s</p>", $accessToken);
-
     // user
-    $userId = $api->me()->id;
-    // print_r($api->me());
+    try {
+        $me = $api->me();
+        $userId = $me->id;
 
-    // playlists
-    // $playlists = $api->getMyPlaylists();
-    // array_walk($playlists->items, function($pl) {
-    //     printf("%s\n", $pl->name);
-    // });
+        printf("<h2>Authorized</h2><p>Token: %s</p>", $accessToken);
+        // print_r($api->me());
 
-    echo("<pre>");
+        if (isset($_GET['expires'])) {
+            $tokenExpiry = \DateTime::createFromFormat('U', (int)$_GET['expires']);
+            $tokenExpiry->setTimezone(new \DateTimeZone('Europe/Berlin'));
+            printf('<p>Expires: %s</p>', $tokenExpiry->format('H:i:s d.m.Y'));
+        }
+
+        printf('<p>User id: %s</p><p><a href="%s">User profile</a></p>', $me->id, $me->external_urls->spotify);
+?>
+<p>
+<form method="get" action="">
+    <input type="submit" value="Restart" />
+</form>
+<?php
+    }
+    catch (SpotifyWebAPIException $e) {
+        if (preg_match('/token expired/i', $e->getMessage())) {
+            header('Location: .');
+            exit;
+        }
+    }
 
     // create dlf playlist
-    $dlfPlaylist = $api->getPlaylistByName('klassik-pop-et-cetera');
-    print_r($dlfPlaylist);
+    // print_r($api->getUserPlaylists($userId)->items);
+    echo("<ul>");
+    foreach ($api->getUserPlaylists($userId)->items as $playlist) {
+        printf('<li><a href="%s">%s</a></li>', $playlist->external_urls->spotify, $playlist->name);
+    }
+    echo("</ul>");
+
+    echo("<pre>");
 
     exit;
 }
 else {
 ?>
 
-<p>
+<h1>dlf</h1>
+<p>playlist to spotify converter</p>
+<p>Visit us at <a href="https://github.com/andig/dlf">GitHub</a>
 <form method="get" action="">
     <input type="hidden" name="action" value="authorize" />
     <input type="submit" value="Authorize" />

@@ -10,6 +10,8 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 use Symfony\Component\Console\Helper\ProgressBar;
 
+use Doctrine\Common\Cache\SQLite3Cache;
+
 class SearchCommand extends Command
 {
     protected function configure()
@@ -225,6 +227,7 @@ class SearchCommand extends Command
     protected function execute(InputInterface $input, OutputInterface $output)
     {
         $api = new SpotifyWrapper();
+        $cache = new SQLite3Cache(new \SQLite3(CACHE_FILE), 'hits');
 
         $clientOptions = [];
         if ($input->getOption('auth')) {
@@ -250,6 +253,7 @@ class SearchCommand extends Command
 
             // full playlist with tracks
             $playlist = $api->getUserPlaylist($userId, $playlist->id);
+            printf("Playlist size: %d\n", count($playlist->tracks->items));
         }
 
         $items = json_decode(file_get_contents($playlistName . '.json'), true);
@@ -264,27 +268,46 @@ class SearchCommand extends Command
         }
 
         foreach ($items as $item) {
-            $json = null;
-            $res = $this->searchSpotify($item, $json);
-            if ($res) {
+            $itemId = null;
+
+            // already added to playlist?
+            $hash = serialize($item);
+            if ($cache->contains($hash))
+                $itemId = $cache->fetch($hash);
+
+            // no hit - search spotify
+            if (!$itemId) {
+                $json = null;
+                $res = $this->searchSpotify($item, $json);
+
+                if ($res) {
+                    if ($output->getVerbosity() >= OutputInterface::VERBOSITY_VERBOSE)
+                      $this->printItem($item);
+
+                    if ($output->getVerbosity() >= OutputInterface::VERBOSITY_VERBOSE) {
+                        printf(" (%d matches)\n", count($json->tracks->items));
+                        $this->printMatch($json);
+                    }
+
+                    $itemId = $json->tracks->items[0]->id;
+                }
+            }
+
+            // hit from cache or spotify search
+            if ($itemId) {
                 $hits++;
 
-                if ($output->getVerbosity() >= OutputInterface::VERBOSITY_VERBOSE)
-                  $this->printItem($item);
-
-                if ($output->getVerbosity() >= OutputInterface::VERBOSITY_VERBOSE) {
-                    printf(" (%d matches)\n", count($json->tracks->items));
-                    $this->printMatch($json);
-                }
-
                 if ($input->getOption('save')) {
-                    $itemId = $json->tracks->items[0]->id;
+                    if (!$api->playlistContains($playlist, $itemId)) {
+                        printf("Adding %s\n", $itemId);
 
-                    if (!$api->playlistContains($playlist, $itemId)) {                    
                         if (!$api->addUserPlaylistTracks($userId, $playlist->id, $itemId)) {
                             print_r($api->getLastResponse());
                             die;
                         }
+
+                        // store spotify id
+                        $cache->save($hash, $itemId);
                     }
                 }
             }

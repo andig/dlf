@@ -15,6 +15,9 @@ use GuzzleHttp\Exception\ConnectException;
 use Concat\Http\Handler\CacheHandler;
 use Doctrine\Common\Cache\FilesystemCache;
 
+use Symfony\Component\Console\Logger\ConsoleLogger;
+use Monolog\Logger;
+
 define('CACHE_DURATION', 3600 * 24 * 365);
 
 class ClientFactory
@@ -22,13 +25,16 @@ class ClientFactory
 	public static function getClient($clientOptions = []) {
 		// Basic directory cache example
 		$cacheProvider = new FilesystemCache(__DIR__ . '/cache');
+
 		// Guzzle will determine an appropriate default handler if `null` is given.
 		$defaultHandler = null;
+
 		// Create a cache handler with a given cache provider and default handler.
 		$cacheHandler = new CacheHandler($cacheProvider, $defaultHandler, [
 			'methods' => ['GET'],
 			'expire' => CACHE_DURATION,
 		]);
+		// $cacheHandler->setLogger(new Logger('cache'));
 
 		$handlerStack = HandlerStack::create($cacheHandler);
 		$handlerStack->push(Middleware::retry(__CLASS__.'::retryDecider', __CLASS__.'::retryDelay'));
@@ -71,6 +77,7 @@ class ClientFactory
 				$retryDelay = $response->getHeaderLine('Retry-After');
 
 				if (strlen($retryDelay)) {
+					printf(" retry delay: %d secs\n", (int)$retryDelay);
 					sleep((int)$retryDelay);
 					return true;
 				}
