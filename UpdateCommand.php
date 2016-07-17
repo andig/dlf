@@ -8,6 +8,8 @@ use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 
+use Symfony\Component\Console\Helper\ProgressBar;
+
 use Symfony\Component\DomCrawler\Crawler;
 
 class UpdateCommand extends Command
@@ -73,25 +75,40 @@ class UpdateCommand extends Command
             if ($item['Titel'] == 'Indikativ "Corso Theme"')
                 return;
 
+            if ($item['Titel'] == 'KOMA PRESSESHAU')
+                return;
+
             if (strpos($item['Titel'], 'aus: ') === 0)
                 $item['Titel'] = substr($item['Titel'], strlen('aus: '));
         }
 
-        foreach ($item as $tag => $value) {
-            printf("%s: %s\n", $tag, $value);
+        if ($this->output->getVerbosity() >= OutputInterface::VERBOSITY_VERBOSE) {
+            foreach ($item as $tag => $value) {
+                printf("%s: %s\n", $tag, $value);
+            }
+            echo("\n");
         }
-        echo("\n");
 
         return $item;
     }
 
     protected function execute(InputInterface $input, OutputInterface $output)
     {
+        $this->output = $output;
+
         $date = new \DateTime("2013-11-16");
         $now = (new \DateTime(/*now*/))->getTimestamp();
         $items = [];
 
         $client = ClientFactory::getClient();
+
+
+        $progress = null;
+        if ($output->getVerbosity() < OutputInterface::VERBOSITY_VERBOSE) {        
+            $progress = new ProgressBar($output);
+            // $progress->setFormat('very_verbose');
+            $progress->start();
+        }
 
         switch ($playlistName = $input->getArgument('playlist')) {
             case 'klassik-pop-et-cetera':
@@ -111,7 +128,6 @@ class UpdateCommand extends Command
             $response = $client->get($uri);
             $body = (string) $response->getBody();
             // echo $body;
-
             $crawler = new Crawler($body);
 
             foreach ($crawler->filter('ul.playlist li table') as $el) {
