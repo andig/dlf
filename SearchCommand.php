@@ -50,19 +50,6 @@ class SearchCommand extends Command
         return trim($q);
     }
 
-
-    function cleanInterpret($q) {
-        if (($pos = strpos($q, ';')) !== false) {
-            $q = substr($q, 0, $pos);
-        }
-
-        if (($pos = strpos($q, '(')) !== false) {
-            $q = substr($q, 0, $pos);
-        }
-
-        return trim($q);
-    }
-
     function getSpotifyVariantUri($item, $variant, &$search) {
         $uri = 'https://api.spotify.com/v1/search?type=track&';
 
