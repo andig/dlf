@@ -4,6 +4,7 @@ namespace Dlf;
 
 use SpotifyWebAPI\Session;
 use SpotifyWebAPI\SpotifyWebAPI;
+use SpotifyWebAPI\Request;
 
 class SpotifyWrapper extends SpotifyWebAPI
 {
@@ -31,24 +32,44 @@ class SpotifyWrapper extends SpotifyWebAPI
 		$playlists = $this->getMyPlaylists();
 
 		// create dlf playlist
-		$playlist = array_reduce($playlists->items, function($carry, $item) use ($name) {
-			if ($item->name == $name) {
-				return $item;
+		foreach ($playlists->items as $playlist) {
+			if ($playlist->name == $name) {
+				return $playlist;
 			}
-			return $carry;
-		});
+		};
 
-		return $playlist;
+		return false;
 	}
 
 	function playlistContains($playlist, $itemId) {
-		$items = array_reduce($playlist->tracks->items, function($carry, $item) use ($itemId) {
+		foreach ($playlist->tracks->items as $item) {
 			if ($item->track->id == $itemId) {
-				return $item;
+				return true;
 			}
-			return $carry;
-		});
+		}
 
-		return $items !== null;
+		return false;
 	}
+
+	function getUserPlaylist($userId, $playlistId, $options = []) {
+		$res = parent::getUserPlaylist($userId, $playlistId, $options);
+
+		$segment = $res->tracks;
+
+        while ($segment->next) {
+			$uri = substr($segment->next, strlen(Request::API_URL));
+
+	        $headers = $this->authHeaders();
+	        $this->lastResponse = $this->request->api('GET', $uri, [], $headers);
+	        $segment = $this->lastResponse['body'];
+
+            // $segment = parent::getUserPlaylist($userId, $playlistId, [
+            //     'offset' => (int)$segment->tracks->offset + (int)$segment->tracks->limit,
+            //     'limit' => (int)$segment->tracks->limit
+            // ]);
+            $res->tracks->items = array_merge($res->tracks->items, $segment->items);
+        }
+
+        return $res;
+    }
 }
