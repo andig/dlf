@@ -8,6 +8,8 @@ use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 
+use Symfony\Component\Console\Helper\ProgressBar;
+
 class SearchCommand extends Command
 {
     protected function configure()
@@ -15,31 +17,38 @@ class SearchCommand extends Command
         $this
             ->setName('search')
             ->setDescription('Search DLF playlist entries at spotify')
+            ->addArgument(
+                'playlist',
+                InputArgument::OPTIONAL,
+                'Playlist name',
+                'klassik-pop-et-cetera'
+            )
+            ->addOption(
+               'auth',
+               null,
+               InputOption::VALUE_NONE,
+               'Use api autorization'
+            )            
+            ->addOption(
+               'save',
+               null,
+               InputOption::VALUE_NONE,
+               'Save search results to playlist'
+            )
         ;
     }
 
-    function getSpotifyApiToken() {
-        global $client;
-
-        $payload = base64_encode(CLIENTID .':'. CLIENTSECRET);
-        $response = $client->request('POST', 'https://accounts.spotify.com/api/token', [
-            'headers' => [
-                'Authorization' => 'Basic ' . $payload
-            ],
-            'form_params' => [
-                'grant_type' => 'client_credentials'
-            ]
-        ]);
-
-        if ($response->getStatusCode() != 200) {
-            echo (string) $response->getBody();
-            die;
+    function cleanInterpret($q) {
+        if (($pos = strpos($q, ';')) !== false) {
+            $q = substr($q, 0, $pos);
         }
 
-        $token = json_decode((string) $response->getBody())->access_token;
-        return $token;
-    }
+        if (($pos = strpos($q, '(')) !== false) {
+            $q = substr($q, 0, $pos);
+        }
 
+        return trim($q);
+    }
 
     function getSpotifyVariantUri($item, $variant, &$search) {
         $uri = 'https://api.spotify.com/v1/search?type=track&';
@@ -74,16 +83,45 @@ class SearchCommand extends Command
                 return FALSE;
 
             $interpret = sprintf("%s%s", $m[1], $m[2]);
+
             $search .= sprintf(" by %s", $interpret);
             $uri .= sprintf("+artist:%s", urlencode($interpret));
+        }
+
+        if (in_array('solist', $variant)) {
+            if (!isset($item['Solist']))
+                return FALSE;
+
+            $q = $this->cleanInterpret($item['Solist']);
+
+            $search .= sprintf(" by %s", $q);
+            $uri .= sprintf("+artist:%s", urlencode($q));
+        }
+
+        if (in_array('ensemble', $variant)) {
+            if (!isset($item['Ensemble']))
+                return FALSE;
+
+            $q = $this->cleanInterpret($item['Ensemble']);
+
+            $search .= sprintf(" by %s", $q);
+            $uri .= sprintf("+artist:%s", urlencode($q));
+        }
+
+        if (in_array('composer', $variant)) {
+            if (!isset($item['Komponist']))
+                return FALSE;
+
+            $q = $this->cleanInterpret($item['Komponist']);
+
+            $search .= sprintf(" by %s", $q);
+            $uri .= sprintf("+artist:%s", urlencode($q));
         }
 
         return $uri;
     }
 
     function searchSpotify($item, &$res) {
-        global $client;
-
         // if ($item['Titel'] !== 'Beautiful day')
         //     return;
 
@@ -98,8 +136,16 @@ class SearchCommand extends Command
         $variants = [
             ['track', 'album', 'interpret'],
             ['track', 'album', 'interpret2'],
+            ['track', 'album', 'solist'],
+            ['track', 'album', 'ensemble'],
+            ['track', 'album', 'composer'],
+
             ['track', 'interpret'],
             ['track', 'interpret2'],
+            ['track', 'solist'],
+            ['track', 'ensemble'],
+            ['track', 'composer'],
+
             ['track', 'album'],
             ['track']
         ];
@@ -147,30 +193,114 @@ class SearchCommand extends Command
 
         // echo $buf;
         if (!$json->tracks->total) {
-            echo $buf;
-            printf("Not found\n");
+            // echo $buf;
+            // printf("Not found\n");
         }
 
         return $json->tracks->total > 0;
     }
 
+    protected function printItem($item) 
+    {   
+        $search = '';
+        $this->getSpotifyVariantUri($item, ['track', 'album', 'interpret'], $search);
+
+        printf("\n--> %s", $search);
+    }
+    
+    protected function printMatch($json)
+    {
+        foreach ($json->tracks->items as $item) {
+            printf("%s %s", $item->id, $item->name);
+            if ($item->album) {
+                printf(" (%s)", $item->album->name);
+            }
+            if (count($item->artists)) {
+                printf(" by %s", $item->artists[0]->name);
+            }
+            printf("\n");
+        }
+    }
 
     protected function execute(InputInterface $input, OutputInterface $output)
     {
-        $this->client = ClientFactory::getClient();
-        
-        $items = json_decode(file_get_contents(CATALOG_FILE), true);
+        $api = new SpotifyWrapper();
+
+        $clientOptions = [];
+        if ($input->getOption('auth')) {
+            $accessToken = file_get_contents(TOKEN_FILE);
+            $clientOptions['headers']['Authorization'] = 'Bearer ' . $accessToken;
+        }
+        $this->client = ClientFactory::getClient($clientOptions);
+
+        $playlistName = $input->getArgument('playlist');
+
+        if ($input->getOption('save')) {
+            $accessToken = file_get_contents(TOKEN_FILE);
+            $api->setAccessToken($accessToken);
+
+            $userId = $api->me()->id;
+
+            // playlist header
+            $playlist = $api->getPlaylistByName($playlistName);
+
+            if (!$playlist) {
+                $playlist = $api->createUserPlaylist($userId, ['name' => $playlistName]);
+            }
+
+            // full playlist with tracks
+            $playlist = $api->getUserPlaylist($userId, $playlist->id);
+        }
+
+        $items = json_decode(file_get_contents($playlistName . '.json'), true);
+        $fails = [];
         $hits = 0;
+
+        $progress = null;
+        if (count($items) && ($output->getVerbosity() < OutputInterface::VERBOSITY_VERBOSE)) {        
+            $progress = new ProgressBar($output, count($items));
+            $progress->setFormat('very_verbose');
+            $progress->start();
+        }
 
         foreach ($items as $item) {
             $json = null;
             $res = $this->searchSpotify($item, $json);
             if ($res) {
                 $hits++;
-                // print_r($json);
+
+                if ($output->getVerbosity() >= OutputInterface::VERBOSITY_VERBOSE)
+                  $this->printItem($item);
+
+                if ($output->getVerbosity() >= OutputInterface::VERBOSITY_VERBOSE) {
+                    printf(" (%d matches)\n", count($json->tracks->items));
+                    $this->printMatch($json);
+                }
+
+                if ($input->getOption('save')) {
+                    $itemId = $json->tracks->items[0]->id;
+
+                    if (!$api->playlistContains($playlist, $itemId)) {                    
+                        if (!$api->addUserPlaylistTracks($userId, $playlist->id, $itemId)) {
+                            print_r($api->getLastResponse());
+                            die;
+                        }
+                    }
+                }
             }
+            else {
+                $fails[] = $item;
+            }
+
+            if ($progress)
+                $progress->advance();
         }
 
-        printf("Found %d of %d titles\n", $hits, count($items));
+        file_put_contents($playlistName . '.fail.json', json_encode($fails, JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE));
+
+        if ($progress)
+            $progress->finish();
+
+        printf("\nFound %d of %d titles (%.1f%%)\n", $hits, count($items), 100*$hits/count($items));
     }
 }

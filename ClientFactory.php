@@ -10,7 +10,7 @@ define('CACHE_DURATION', 3600 * 24 * 365);
 
 class ClientFactory
 {
-	public static function getClient() {
+	public static function getClient($clientOptions = []) {
 		// Basic directory cache example
 		$cacheProvider = new FilesystemCache(__DIR__ . '/cache');
 		// Guzzle will determine an appropriate default handler if `null` is given.
@@ -21,10 +21,13 @@ class ClientFactory
 		    'expire' => CACHE_DURATION,
 		]);
 
-		$client = new Client([
+		$options = array_merge([
 		    'handler' => $handler,
 		    'timeout'  => 10,
-		]);
+		    // 'allow_redirects' => false,
+		], $clientOptions);
+
+		$client = new Client($options);
 
 		return $client;
 	}

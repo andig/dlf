@@ -6,10 +6,10 @@ use Symfony\Component\Console\Application;
 
 require_once('./vendor/autoload.php');
 require_once('credentials.php');
-
-define('CATALOG_FILE', 'catalog.json');
+require_once('defines.php');
 
 $application = new Application();
 $application->add(new UpdateCommand());
 $application->add(new SearchCommand());
+$application->add(new AuthorizeCommand());
 $application->run();
