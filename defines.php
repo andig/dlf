@@ -12,3 +12,9 @@ define('SCOPES', array(
         'playlist-modify-private'
     ),
 ));
+
+define('GET_PLAYLIST_TRACKS_OPTIONS', array(
+	'fields' => 'items.track(!album,artists,available_markets,preview_url,external_urls,external_ids,href,uri),next,limit,offset'
+));
+
+define('ADD_CHUNK_SIZE', 20);

@@ -10,10 +10,14 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 use Symfony\Component\Console\Helper\ProgressBar;
 
+use Doctrine\Common\Cache\ArrayCache;
 use Doctrine\Common\Cache\SQLite3Cache;
 
 class SearchCommand extends Command
 {
+    protected $addCache;
+    protected $userId;
+
     protected function configure()
     {
         $this
@@ -53,12 +57,10 @@ class SearchCommand extends Command
     }
 
     function getSpotifyVariantUri($item, $variant, &$search) {
-        $uri = 'https://api.spotify.com/v1/search?type=track&';
-
         if (in_array('track', $variant) && isset($item['Titel'])) {
             $title = preg_replace('/[,.:;]/', '', $item['Titel']);
             $search .= $title;
-            $uri .= sprintf("q=%s", urlencode($title));
+            $uri = $title;
         }
 
         if (in_array('album', $variant)) {
@@ -66,7 +68,7 @@ class SearchCommand extends Command
                 return FALSE;
 
             $search .= sprintf(" (%s)", $item['Album']);
-            $uri .= sprintf("+album:%s", urlencode($item['Album']));
+            $uri .= sprintf(" album:%s", $item['Album']);
         }
 
         if (in_array('interpret', $variant)) {
@@ -74,7 +76,7 @@ class SearchCommand extends Command
                 return FALSE;
 
             $search .= sprintf(" by %s", $item['Interpret']);
-            $uri .= sprintf("+artist:%s", urlencode($item['Interpret']));
+            $uri .= sprintf(" artist:%s", $item['Interpret']);
         }
 
         if (in_array('interpret2', $variant)) {
@@ -87,7 +89,7 @@ class SearchCommand extends Command
             $interpret = sprintf("%s%s", $m[1], $m[2]);
 
             $search .= sprintf(" by %s", $interpret);
-            $uri .= sprintf("+artist:%s", urlencode($interpret));
+            $uri .= sprintf(" artist:%s", $interpret);
         }
 
         if (in_array('solist', $variant)) {
@@ -97,7 +99,7 @@ class SearchCommand extends Command
             $q = $this->cleanInterpret($item['Solist']);
 
             $search .= sprintf(" by %s", $q);
-            $uri .= sprintf("+artist:%s", urlencode($q));
+            $uri .= sprintf(" artist:%s", $q);
         }
 
         if (in_array('ensemble', $variant)) {
@@ -107,7 +109,7 @@ class SearchCommand extends Command
             $q = $this->cleanInterpret($item['Ensemble']);
 
             $search .= sprintf(" by %s", $q);
-            $uri .= sprintf("+artist:%s", urlencode($q));
+            $uri .= sprintf(" artist:%s", $q);
         }
 
         if (in_array('composer', $variant)) {
@@ -117,16 +119,13 @@ class SearchCommand extends Command
             $q = $this->cleanInterpret($item['Komponist']);
 
             $search .= sprintf(" by %s", $q);
-            $uri .= sprintf("+artist:%s", urlencode($q));
+            $uri .= sprintf(" artist:%s", $q);
         }
 
         return $uri;
     }
 
     function searchSpotify($item, &$res) {
-        // if ($item['Titel'] !== 'Beautiful day')
-        //     return;
-
         // artist
         // [Interpret] => Jane Jane Monheit
         // [Dirigent] => Edward Shearmur
@@ -156,27 +155,18 @@ class SearchCommand extends Command
 
         foreach ($variants as $variant) {
             $search = '';
-            $uri = $this->getSpotifyVariantUri($item, $variant, $search);
+            $q = $this->getSpotifyVariantUri($item, $variant, $search);
             // early exit if not substituted
-            if ($uri === FALSE)
+            if ($q === FALSE)
                 continue;
 
             $buf .= sprintf("Search: %s\n", $search);
-            $buf .= sprintf("%s\n", $uri);
+            $buf .= sprintf("%s\n", $q);
 
-            $response = $this->client->get($uri);
-
-            if ($response->getStatusCode() !== 200) {
-                printf("\nsearch failed: %d\n%s\n", $response->getStatusCode(), $response->getBody());
-                die;
-            }
-
-            $json = json_decode($response->getBody());
-            // printf(" -> %d\n", $json->tracks->total);
+            $json = $this->api->search($q, ['track']);
 
             if ($json->tracks->total) {
                 // print_r($json);
-                // echo $response->getBody();
                 $buf .= sprintf("Found: %s (%s) by %s\n",
                     $json->tracks->items[0]->name,
                     $json->tracks->items[0]->album->name,
@@ -224,67 +214,74 @@ class SearchCommand extends Command
         }
     }
 
-    protected function execute(InputInterface $input, OutputInterface $output)
+    private function findOrCreatePlaylist($playlistName)
     {
-        $api = new SpotifyWrapper();
-        $cache = new SQLite3Cache(new \SQLite3(CACHE_FILE), 'hits');
-
-        $clientOptions = [];
-        if ($input->getOption('auth')) {
-            $accessToken = file_get_contents(TOKEN_FILE);
-            $clientOptions['headers']['Authorization'] = 'Bearer ' . $accessToken;
+        if (!($playlist = $this->api->getPlaylistByName($playlistName))) {
+            $playlist = $this->api->createUserPlaylist($this->userId, ['name' => $playlistName]);
         }
-        $this->client = ClientFactory::getClient($clientOptions);
 
-        $playlistName = $input->getArgument('playlist');
+        return $playlist->id;
+    }
 
-        if ($input->getOption('save')) {
-            $accessToken = file_get_contents(TOKEN_FILE);
-            $api->setAccessToken($accessToken);
+    private function addAndApplyBacklog($itemId = null) {
+        if ($itemId)
+            $this->addCache[] = $itemId;
 
-            $userId = $api->me()->id;
-
-            // playlist header
-            $playlist = $api->getPlaylistByName($playlistName);
-
-            if (!$playlist) {
-                $playlist = $api->createUserPlaylist($userId, ['name' => $playlistName]);
+        if (count($this->addCache) >= ADD_CHUNK_SIZE) {
+            if (!$this->api->addUserPlaylistTracks($this->userId, $this->playlistId, $this->addCache)) {
+                print_r($this->api->getLastResponse());
+                die;
             }
 
-            // full playlist with tracks
-            $playlist = $api->getUserPlaylist($userId, $playlist->id);
-            printf("Playlist size: %d\n", count($playlist->tracks->items));
+            $this->addCache = [];
+        }
+    }
+
+    protected function execute(InputInterface $input, OutputInterface $output)
+    {
+        $addedIdsCache = new ArrayCache();
+        $spotifyIdCache = new SQLite3Cache(new \SQLite3(CACHE_FILE), 'hits');
+
+        $this->api = new SpotifyWrapper(new SpotifyGuzzleAdapter(ClientFactory::getClient()));
+
+        $playlistName = $input->getArgument('playlist');
+        $items = json_decode(file_get_contents($playlistName . '.json'), true);
+
+        if ($input->getOption('save') || $input->getOption('auth')) {
+            $accessToken = file_get_contents(TOKEN_FILE);
+            $this->api->setAccessToken($accessToken);
         }
 
-        $items = json_decode(file_get_contents($playlistName . '.json'), true);
-        $fails = [];
-        $hits = 0;
+        if ($input->getOption('save')) {
+            $this->userId = $this->api->me()->id;
+            $this->playlistId = $this->findOrCreatePlaylist($playlistName);
+
+            // full playlist with tracks
+            $playlist = $this->api->getUserPlaylistAllTracks($this->userId, $this->playlistId, GET_PLAYLIST_TRACKS_OPTIONS);
+            printf("Playlist size: %d\n", count($playlist->items));
+        }
+
+        $searchFailures = [];
+        $dupes = $hits = 0;
 
         $progress = null;
-        if (count($items) && ($output->getVerbosity() < OutputInterface::VERBOSITY_VERBOSE)) {        
+        if (count($items) && ($output->getVerbosity() < OutputInterface::VERBOSITY_VERY_VERBOSE)) {        
             $progress = new ProgressBar($output, count($items));
             $progress->setFormat('very_verbose');
             $progress->start();
         }
 
         foreach ($items as $item) {
-            $itemId = null;
-
-            // already added to playlist?
+            // already searched and found on spotify?
             $hash = serialize($item);
-            if ($cache->contains($hash))
-                $itemId = $cache->fetch($hash);
+            $itemId = $spotifyIdCache->fetch($hash);
 
             // no hit - search spotify
             if (!$itemId) {
                 $json = null;
-                $res = $this->searchSpotify($item, $json);
-
-                if ($res) {
-                    if ($output->getVerbosity() >= OutputInterface::VERBOSITY_VERBOSE)
-                      $this->printItem($item);
-
+                if ($this->searchSpotify($item, $json)) {
                     if ($output->getVerbosity() >= OutputInterface::VERBOSITY_VERBOSE) {
+                        $this->printItem($item);
                         printf(" (%d matches)\n", count($json->tracks->items));
                         $this->printMatch($json);
                     }
@@ -297,33 +294,36 @@ class SearchCommand extends Command
             if ($itemId) {
                 $hits++;
 
-                if ($input->getOption('save')) {
-                    if (!$api->playlistContains($playlist, $itemId)) {
-                        printf("Adding %s\n", $itemId);
+                if ($addedIdsCache->contains($itemId)) {
+                    $dupes++;
+                }
+                elseif ($input->getOption('save')) {
+                    if (!$this->api->playlistContains($playlist, $itemId)) {
+                        if ($output->getVerbosity() >= OutputInterface::VERBOSITY_VERBOSE)
+                            printf("\nAdding %s\n", $itemId);
 
-                        if (!$api->addUserPlaylistTracks($userId, $playlist->id, $itemId)) {
-                            print_r($api->getLastResponse());
-                            die;
-                        }
+                        $this->addAndApplyBacklog($itemId);
 
                         // store spotify id
-                        $cache->save($hash, $itemId);
+                        $spotifyIdCache->save($hash, $itemId);
                     }
                 }
+
+                $addedIdsCache->save($itemId, $itemId);
             }
             else {
-                $fails[] = $item;
+                $searchFailures[] = $item;
             }
 
-            if ($progress)
-                $progress->advance();
+            if ($progress) $progress->advance();
         }
 
-        file_put_contents($playlistName . '.fail.json', json_encode($fails, JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE));
+        $this->addAndApplyBacklog();
 
-        if ($progress)
-            $progress->finish();
+        if ($progress) $progress->finish();
 
-        printf("\nFound %d of %d titles (%.1f%%)\n", $hits, count($items), 100*$hits/count($items));
+        file_put_contents($playlistName . '.fail.json', json_encode($searchFailures, JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE));
+
+        printf("\nFound %d of %d titles (%.1f%%)\n", $hits - $dupes, count($items), 100*$hits/(count($items) - $dupes));
     }
 }

@@ -42,7 +42,9 @@ class SpotifyWrapper extends SpotifyWebAPI
 	}
 
 	function playlistContains($playlist, $itemId) {
-		foreach ($playlist->tracks->items as $item) {
+		$root = (isset($playlist->tracks)) ? $playlist->tracks : $playlist;
+		
+		foreach ($root->items as $item) {
 			if ($item->track->id == $itemId) {
 				return true;
 			}
@@ -51,25 +53,17 @@ class SpotifyWrapper extends SpotifyWebAPI
 		return false;
 	}
 
-	function getUserPlaylist($userId, $playlistId, $options = []) {
-		$res = parent::getUserPlaylist($userId, $playlistId, $options);
-
-		$segment = $res->tracks;
+	function getUserPlaylistAllTracks($userId, $playlistId, $options = []) {
+		$playlist = $segment = $this->getUserPlaylistTracks($userId, $playlistId, $options);
 
         while ($segment->next) {
-			$uri = substr($segment->next, strlen(Request::API_URL));
-
-	        $headers = $this->authHeaders();
-	        $this->lastResponse = $this->request->api('GET', $uri, [], $headers);
-	        $segment = $this->lastResponse['body'];
-
-            // $segment = parent::getUserPlaylist($userId, $playlistId, [
-            //     'offset' => (int)$segment->tracks->offset + (int)$segment->tracks->limit,
-            //     'limit' => (int)$segment->tracks->limit
-            // ]);
-            $res->tracks->items = array_merge($res->tracks->items, $segment->items);
+            $segment = $this->getUserPlaylistTracks($userId, $playlistId, array_merge($options, [
+                'offset' => (int)$segment->offset + (int)$segment->limit,
+                'limit' => (int)$segment->limit
+            ]));
+            $playlist->items = array_merge($playlist->items, $segment->items);
         }
 
-        return $res;
+        return $playlist;
     }
 }
