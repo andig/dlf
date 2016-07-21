@@ -12,10 +12,14 @@ use GuzzleHttp\Psr7\Response;
 use GuzzleHttp\Exception\RequestException;
 use GuzzleHttp\Exception\ConnectException;
 
-use Concat\Http\Handler\CacheHandler;
+// use Concat\Http\Handler\CacheHandler;
+
+use Kevinrob\GuzzleCache\CacheMiddleware;
+use Kevinrob\GuzzleCache\Strategy\PrivateCacheStrategy;
+use Kevinrob\GuzzleCache\Storage\DoctrineCacheStorage;
+
 use Doctrine\Common\Cache\FilesystemCache;
 
-use Symfony\Component\Console\Logger\ConsoleLogger;
 use Monolog\Logger;
 
 define('CACHE_DURATION', 3600 * 24 * 365);
@@ -25,7 +29,7 @@ class ClientFactory
 	public static function getClient($clientOptions = []) {
 		// Basic directory cache example
 		$cacheProvider = new FilesystemCache(__DIR__ . '/cache');
-
+/*
 		// Guzzle will determine an appropriate default handler if `null` is given.
 		$defaultHandler = null;
 
@@ -34,9 +38,17 @@ class ClientFactory
 			'methods' => ['GET'],
 			'expire' => CACHE_DURATION,
 		]);
-		// $cacheHandler->setLogger(new Logger('cache'));
-
+		$cacheHandler->setLogger(new Logger('cache'));
 		$handlerStack = HandlerStack::create($cacheHandler);
+*/
+		$cacheHandler = new CacheMiddleware(
+			new PrivateCacheStrategy(
+				new DoctrineCacheStorage($cacheProvider)
+			)
+		);
+
+		$handlerStack = HandlerStack::create();
+		$handlerStack->push($cacheHandler);
 		$handlerStack->push(Middleware::retry(__CLASS__.'::retryDecider', __CLASS__.'::retryDelay'));
 
 		$options = array_merge([
