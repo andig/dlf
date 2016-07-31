@@ -12,4 +12,5 @@ $application = new Application();
 $application->add(new UpdateCommand());
 $application->add(new SearchCommand());
 $application->add(new AuthorizeCommand());
+$application->add(new ResetCommand());
 $application->run();
