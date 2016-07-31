@@ -12,6 +12,10 @@ use Symfony\Component\Console\Helper\ProgressBar;
 
 use Doctrine\Common\Cache\ArrayCache;
 use Doctrine\Common\Cache\SQLite3Cache;
+use Doctrine\Common\Cache\FilesystemCache;
+
+use SpotifyWebApiExtensions\GuzzleRequestAdapter;
+use SpotifyWebApiExtensions\GuzzleClientFactory;
 
 class SearchCommand extends Command
 {
@@ -163,7 +167,7 @@ class SearchCommand extends Command
             $buf .= sprintf("Search: %s\n", $search);
             $buf .= sprintf("%s\n", $q);
 
-            $json = $this->api->search($q, ['track']);
+            $json = $this->api->search($q, ['track'], SEARCH_OPTIONS);
 
             if ($json->tracks->total) {
                 // print_r($json);
@@ -242,7 +246,14 @@ class SearchCommand extends Command
         $addedIdsCache = new ArrayCache();
         $spotifyIdCache = new SQLite3Cache(new \SQLite3(CACHE_FILE), 'hits');
 
-        $this->api = new SpotifyWrapper(new SpotifyGuzzleAdapter(ClientFactory::getClient()));
+
+        $this->api = new SpotifyWrapper(
+            new GuzzleRequestAdapter(
+                GuzzleClientFactory::create(
+                    new FilesystemCache(__DIR__ . '/cache')
+                )
+            )
+        );
 
         $playlistName = $input->getArgument('playlist');
         $items = json_decode(file_get_contents($playlistName . '.json'), true);
@@ -324,6 +335,6 @@ class SearchCommand extends Command
 
         file_put_contents($playlistName . '.fail.json', json_encode($searchFailures, JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE));
 
-        printf("\nFound %d of %d titles (%.1f%%)\n", $hits - $dupes, count($items), 100*$hits/(count($items) - $dupes));
+        printf("\nFound %d of %d titles (%.1f%%), %d duplicates\n", $hits - $dupes, count($items) - $dupes, 100*($hits - $dupes)/(count($items) - $dupes), $dupes);
     }
 }

@@ -12,6 +12,10 @@ use Symfony\Component\Console\Helper\ProgressBar;
 
 use Symfony\Component\DomCrawler\Crawler;
 
+use Doctrine\Common\Cache\FilesystemCache;
+
+use SpotifyWebApiExtensions\GuzzleClientFactory;
+
 class UpdateCommand extends Command
 {
     protected function configure()
@@ -100,8 +104,9 @@ class UpdateCommand extends Command
         $now = (new \DateTime(/*now*/))->getTimestamp();
         $items = [];
 
-        $client = ClientFactory::getClient();
-
+        $client = GuzzleClientFactory::create(
+            new FilesystemCache(__DIR__ . '/cache')
+        );
 
         $progress = null;
         if ($output->getVerbosity() < OutputInterface::VERBOSITY_VERBOSE) {        
